@@ -8,6 +8,7 @@ import hudson.model.AbstractProject;
 import hudson.model.Action;
 import hudson.model.BuildListener;
 import hudson.model.Cause.UpstreamCause;
+import hudson.model.queue.QueueTaskFuture;
 import hudson.model.Hudson;
 import hudson.model.Job;
 import hudson.model.Node;
@@ -48,28 +49,28 @@ public class BlockableBuildTriggerConfig extends BuildTriggerConfig {
     }
 
     @Override
-    public List<Future<AbstractBuild>> perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
-        List<Future<AbstractBuild>> r = super.perform(build, launcher, listener);
+    public List<QueueTaskFuture<? extends AbstractBuild>> perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+        List<QueueTaskFuture<? extends AbstractBuild>> r = super.perform(build, launcher, listener);
         if (block==null) return Collections.emptyList();
         return r;
     }
 
     @Override
-    public ListMultimap<AbstractProject, Future<AbstractBuild>> perform2(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
-        ListMultimap<AbstractProject, Future<AbstractBuild>> futures = super.perform2(build, launcher, listener);
+    public ListMultimap<AbstractProject, QueueTaskFuture<? extends AbstractBuild>> perform2(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+        ListMultimap<AbstractProject, QueueTaskFuture<? extends AbstractBuild>> futures = super.perform2(build, launcher, listener);
         if(block==null) return ArrayListMultimap.create();
         return futures;
     }
 
     @Override
-    public ListMultimap<Job, Future<Run>> perform3(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
-        ListMultimap<Job, Future<Run>> futures = super.perform3(build, launcher, listener);
+    public ListMultimap<Job, QueueTaskFuture<? extends AbstractBuild>> perform3(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+        ListMultimap<Job, QueueTaskFuture<? extends AbstractBuild>> futures = super.perform3(build, launcher, listener);
         if(block==null) return ArrayListMultimap.create();
         return futures;
     }
 
     @Override
-    protected Future schedule(AbstractBuild<?, ?> build, Job project, List<Action> list) throws InterruptedException, IOException {
+    protected QueueTaskFuture schedule(AbstractBuild<?, ?> build, Job project, List<Action> list) throws InterruptedException, IOException {
         if (block!=null) {
             while (true) {
                 // add DifferentiatingAction to make sure this doesn't get merged with something else,
@@ -78,7 +79,7 @@ public class BlockableBuildTriggerConfig extends BuildTriggerConfig {
 
                 // if we fail to add the item to the queue, wait and retry.
                 // it also means we have to force quiet period = 0, or else it'll never leave the queue
-                Future f = schedule(build, project, 0, list);
+                QueueTaskFuture f = schedule(build, project, 0, list);
                 // When a project is disabled or the configuration is not yet saved f will always be null and we're caught in a loop, therefore we need to check for it
                 if (f!=null || (f==null && !project.isBuildable())){
                     return f;

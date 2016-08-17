@@ -25,6 +25,7 @@ import hudson.model.Job;
 import hudson.model.ParametersAction;
 import hudson.model.Run;
 import hudson.model.TaskListener;
+import hudson.model.queue.QueueTaskFuture;
 import hudson.model.queue.Tasks;
 import hudson.plugins.parameterizedtrigger.AbstractBuildParameters.DontTriggerException;
 import hudson.plugins.promoted_builds.Promotion;
@@ -374,14 +375,14 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
      * Note that with Hudson 1.341, trigger should be using
 	 * {@link BuildTrigger#buildDependencyGraph(AbstractProject, hudson.model.DependencyGraph)}.
 	 */
-	public List<Future<AbstractBuild>> perform(AbstractBuild<?, ?> build, Launcher launcher,
+	public List<QueueTaskFuture<? extends AbstractBuild>> perform(AbstractBuild<?, ?> build, Launcher launcher,
 			BuildListener listener) throws InterruptedException, IOException {
         EnvVars env = build.getEnvironment(listener);
         env.overrideAll(build.getBuildVariables());
 
         try {
 			if (condition.isMet(build.getResult())) {
-                List<Future<AbstractBuild>> futures = new ArrayList<Future<AbstractBuild>>();
+                List<QueueTaskFuture<? extends AbstractBuild>> futures = new ArrayList<QueueTaskFuture<? extends AbstractBuild>>();
 
                 for (List<AbstractBuildParameters> addConfigs : getDynamicBuildParameters(build, listener)) {
                     List<Action> actions = getBaseActions(
@@ -408,15 +409,15 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
     *      Use {@link #perform3(AbstractBuild, Launcher, BuildListener)}
     */
     @Deprecated
-    public ListMultimap<AbstractProject, Future<AbstractBuild>> perform2(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
-        ListMultimap<Job, Future<Run>> initialResult = perform3(build, launcher, listener);
-        ListMultimap<AbstractProject, Future<AbstractBuild>> output = ArrayListMultimap.create();
+    public ListMultimap<AbstractProject, QueueTaskFuture<? extends AbstractBuild>> perform2(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+        ListMultimap<Job, QueueTaskFuture<? extends AbstractBuild>> initialResult = perform3(build, launcher, listener);
+        ListMultimap<AbstractProject, QueueTaskFuture<? extends AbstractBuild>> output = ArrayListMultimap.create();
 
-        for (Map.Entry<Job, Future<Run>> entry : initialResult.entries()) {
+        for (Map.Entry<Job, QueueTaskFuture<? extends AbstractBuild>> entry : initialResult.entries()) {
             if (entry.getKey() instanceof AbstractProject) {
                 // Due to type erasure we can't check if the Future<Run> is a Future<AbstractBuild>
                 // Plugins extending the method and dependent on the perform2 method will break if we trigger on a WorkflowJob
-                output.put((AbstractProject)entry.getKey(), (Future)entry.getValue());
+                output.put((AbstractProject)entry.getKey(), entry.getValue());
             }
         }
 
@@ -424,13 +425,13 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
     }
 
     //Replaces perform2 with more general form
-    public ListMultimap<Job, Future<Run>> perform3(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
+    public ListMultimap<Job, QueueTaskFuture<? extends AbstractBuild>> perform3(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener) throws InterruptedException, IOException {
         EnvVars env = build.getEnvironment(listener);
         env.overrideAll(build.getBuildVariables());
 
         try {
             if (getCondition().isMet(build.getResult())) {
-                ListMultimap<Job, Future<Run>> futures = ArrayListMultimap.create();
+                ListMultimap<Job, QueueTaskFuture<? extends AbstractBuild>> futures = ArrayListMultimap.create();
 
                 for (List<AbstractBuildParameters> addConfigs : getDynamicBuildParameters(build, listener)) {
                     List<Action> actions = getBaseActions(ImmutableList.<AbstractBuildParameters>builder().addAll(configs).addAll(addConfigs).build(), build, listener);
@@ -506,7 +507,7 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
     }
 
     @CheckForNull
-    protected Future schedule(AbstractBuild<?, ?> build, final Job project, int quietPeriod, List<Action> list) throws InterruptedException, IOException {
+    protected QueueTaskFuture<? extends AbstractBuild> schedule(AbstractBuild<?, ?> build, final Job<?, ? extends AbstractBuild> project, int quietPeriod, List<Action> list) throws InterruptedException, IOException {
         // TODO Once it's in core (since 1.621) and LTS is out, switch to use new ParameterizedJobMixIn convenience method
         // From https://github.com/jenkinsci/jenkins/pull/1771
         Cause cause = createUpstreamCause(build);
@@ -517,9 +518,9 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
 
         // Includes both traditional projects via AbstractProject and Workflow Job
         if (project instanceof ParameterizedJobMixIn.ParameterizedJob) {
-            final ParameterizedJobMixIn<?, ?> parameterizedJobMixIn = new ParameterizedJobMixIn() {
+            final ParameterizedJobMixIn<?, ? extends AbstractBuild> parameterizedJobMixIn = new ParameterizedJobMixIn() {
                 @Override
-                protected Job<?, ?> asJob() {
+                protected Job<?, ? extends AbstractBuild> asJob() {
                     return project;
                 }
             };
@@ -530,7 +531,7 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
         return null;
     }
 
-    protected Future schedule(AbstractBuild<?, ?> build, Job project, List<Action> list) throws InterruptedException, IOException {
+    protected QueueTaskFuture<? extends AbstractBuild> schedule(AbstractBuild<?, ?> build, Job project, List<Action> list) throws InterruptedException, IOException {
         if (project instanceof ParameterizedJobMixIn.ParameterizedJob) {
             return schedule(build, project, ((ParameterizedJobMixIn.ParameterizedJob) project).getQuietPeriod(), list);
         } else {
