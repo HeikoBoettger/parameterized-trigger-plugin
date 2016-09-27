@@ -44,13 +44,16 @@ import org.kohsuke.accmod.Restricted;
 import org.kohsuke.stapler.DataBoundConstructor;
 
 import java.io.IOException;
+import java.lang.Character.UnicodeScript;
 import java.util.*;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
- * {@link Builder} that triggers other projects and optionally waits for their completion.
+ * {@link Builder} that triggers other projects and optionally waits for their
+ * completion.
  *
  * @author Kohsuke Kawaguchi
  */
@@ -77,8 +80,8 @@ public class TriggerBuilder extends Builder {
     }
 
     @Override
-    public boolean perform(AbstractBuild<?, ?> build, Launcher launcher,
-            BuildListener listener) throws InterruptedException, IOException {
+    public boolean perform(AbstractBuild<?, ?> build, Launcher launcher, BuildListener listener)
+            throws InterruptedException, IOException {
         EnvVars env = build.getEnvironment(listener);
         env.overrideAll(build.getBuildVariables());
 
@@ -86,7 +89,8 @@ public class TriggerBuilder extends Builder {
 
         try {
             for (BlockableBuildTriggerConfig config : configs) {
-                ListMultimap<Job, QueueTaskFuture<? extends AbstractBuild>> futures = config.perform3(build, launcher, listener);
+                ListMultimap<Job, QueueTaskFuture<? extends AbstractBuild>> futures = config.perform3(build, launcher,
+                        listener);
                 // Only contains resolved projects
                 List<Job> projectList = config.getJobs(build.getRootBuild().getProject().getParent(), env);
 
@@ -97,7 +101,7 @@ public class TriggerBuilder extends Builder {
                     throw new AbortException("Build aborted. No projects to trigger. Check your configuration!");
                 } else if (tokenizer.countTokens() != projectList.size()) {
 
-                    int nbrOfResolved = tokenizer.countTokens()-projectList.size();
+                    int nbrOfResolved = tokenizer.countTokens() - projectList.size();
 
                     // Identify the unresolved project(s)
                     Set<String> unsolvedProjectNames = new TreeSet<String>();
@@ -116,30 +120,68 @@ public class TriggerBuilder extends Builder {
                         missingProject.append("\n");
                     }
 
-                    throw new AbortException("Build aborted. Can't trigger undefined projects. "+nbrOfResolved+" of the below project(s) can't be resolved:\n" + missingProject.toString() + "Check your configuration!");
+                    throw new AbortException("Build aborted. Can't trigger undefined projects. " + nbrOfResolved
+                            + " of the below project(s) can't be resolved:\n" + missingProject.toString()
+                            + "Check your configuration!");
                 } else {
-                    //handle non-blocking configs
-                    if(futures.isEmpty()){
+                    // handle non-blocking configs
+                    if (futures.isEmpty()) {
                         listener.getLogger().println("Triggering projects: " + getProjectListAsString(projectList));
-                        for(Job p : projectList) {
+                        for (Job p : projectList) {
                             BuildInfoExporterAction.addBuildInfoExporterAction(build, p.getFullName());
                         }
                         continue;
                     }
-                    //handle blocking configs
+
+                    // handle blocking configs
                     for (Job p : projectList) {
-                        //handle non-buildable projects
-                        if(!p.isBuildable()){
-                            listener.getLogger().println("Skipping " + HyperlinkNote.encodeTo('/'+ p.getUrl(), p.getFullDisplayName()) + ". The project is either disabled or the configuration has not been saved yet.");
+                        // handle non-buildable projects
+                        if (!p.isBuildable()) {
+                            listener.getLogger().println("Skipping "
+                                    + HyperlinkNote.encodeTo('/' + p.getUrl(), p.getFullDisplayName())
+                                    + ". The project is either disabled or the configuration has not been saved yet.");
                             continue;
                         }
                         for (QueueTaskFuture<? extends AbstractBuild> future : futures.get(p)) {
-                            try {
+                            listener.getLogger().println("Waiting for the completion of "
+                                    + HyperlinkNote.encodeTo('/' + p.getUrl(), p.getFullDisplayName()));
+                            BuildInfoExporterAction.addBuildInfoExporterAction(build, future);
+                        }
+                    }
+
+                    boolean allDone;
+                    Set<Future<? extends AbstractBuild>> done = new HashSet<Future<? extends AbstractBuild>>();
+                    do {
+                        allDone = true;
+                        for (Job p : projectList) {
+                            // handle non-buildable projects
+                            if (!p.isBuildable()) {
+                                continue;
+                            }
+
+                            for (QueueTaskFuture<? extends AbstractBuild> future : futures.get(p)) {
+                                try {
                                 if (future != null ) {
-                                    listener.getLogger().println("Waiting for the completion of " + HyperlinkNote.encodeTo('/'+ p.getUrl(), p.getFullDisplayName()));
+                                    listener.getLogger().println("Checking for the completion of "
+                                            + HyperlinkNote.encodeTo('/' + p.getUrl(), p.getFullDisplayName()));
+                                    Future<? extends AbstractBuild> startCondition = future.getStartCondition();
+                                    if (!startCondition.isDone()) {
+                                        allDone = false;
+                                        continue;
+                                    }
+                                    if (done.add(startCondition)) {
+                                        listener.getLogger().println(
+                                                HyperlinkNote.encodeTo('/' + p.getUrl(), p.getFullDisplayName())
+                                                        + " scheduled.");
+                                    }
+                                    if (!future.isDone()) {
+                                        allDone = false;
+                                        continue;
+                                    }
                                     Run b = future.get();
-                                    listener.getLogger().println(HyperlinkNote.encodeTo('/' + b.getUrl(), b.getFullDisplayName()) + " completed. Result was " + b.getResult());
-                                    BuildInfoExporterAction.addBuildInfoExporterAction(build, b.getParent().getFullName(), b.getNumber(), b.getResult());
+                                    listener.getLogger()
+                                            .println(HyperlinkNote.encodeTo('/' + b.getUrl(), b.getFullDisplayName())
+                                                    + " completed. Result was " + b.getResult());
 
                                     if (buildStepResult && config.getBlock().mapBuildStepResult(b.getResult())) {
                                         build.setResult(config.getBlock().mapBuildResult(b.getResult()));
@@ -148,12 +190,19 @@ public class TriggerBuilder extends Builder {
                                     }
                                 } else {
                                     listener.getLogger().println("Skipping " + HyperlinkNote.encodeTo('/'+ p.getUrl(), p.getFullDisplayName()) + ". The project was not triggered by some reason.");
+                                    }
+                                } catch (CancellationException x) {
+                                    throw new AbortException(p.getFullDisplayName() + " aborted.");
                                 }
-                            } catch (CancellationException x) {
-                                throw new AbortException(p.getFullDisplayName() +" aborted.");
                             }
                         }
-                    }
+                        if (!allDone) {
+                            Thread.sleep(15);
+                        }
+                    } while (!allDone);
+                    BuildInfoExporterAction action = build.getAction(BuildInfoExporterAction.class);
+                    if (action != null)
+                        action.updateReferences();
                 }
             }
         } catch (ExecutionException e) {
@@ -163,14 +212,15 @@ public class TriggerBuilder extends Builder {
         return buildStepResult;
     }
 
-    // Public but restricted so we can add tests without completely changing the tests package
-    @Restricted(value=org.kohsuke.accmod.restrictions.NoExternalUse.class)
-    public String getProjectListAsString(List<Job> projectList){
+    // Public but restricted so we can add tests without completely changing the
+    // tests package
+    @Restricted(value = org.kohsuke.accmod.restrictions.NoExternalUse.class)
+    public String getProjectListAsString(List<Job> projectList) {
         StringBuilder projectListString = new StringBuilder();
         for (Iterator<Job> iterator = projectList.iterator(); iterator.hasNext();) {
             Job project = iterator.next();
-            projectListString.append(HyperlinkNote.encodeTo('/'+ project.getUrl(), project.getFullDisplayName()));
-            if(iterator.hasNext()){
+            projectListString.append(HyperlinkNote.encodeTo('/' + project.getUrl(), project.getFullDisplayName()));
+            if (iterator.hasNext()) {
                 projectListString.append(", ");
             }
         }
