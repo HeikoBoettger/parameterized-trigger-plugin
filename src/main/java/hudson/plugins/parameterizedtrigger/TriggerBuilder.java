@@ -50,6 +50,8 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 /**
  * {@link Builder} that triggers other projects and optionally waits for their
@@ -58,6 +60,8 @@ import java.util.concurrent.TimeUnit;
  * @author Kohsuke Kawaguchi
  */
 public class TriggerBuilder extends Builder {
+
+    private static final Logger LOGGER = Logger.getLogger(TriggerBuilder.class.getName());
 
     private final ArrayList<BlockableBuildTriggerConfig> configs;
 
