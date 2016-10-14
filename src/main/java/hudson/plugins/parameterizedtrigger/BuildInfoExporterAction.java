@@ -38,6 +38,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
@@ -228,7 +229,7 @@ public class BuildInfoExporterAction implements EnvironmentContributingAction {
       }
 
       Future<? extends AbstractBuild> startCondition = buildFuture.getStartCondition();
-      if (!startCondition.isDone()) {
+      if (!startCondition.isDone() || startCondition.isCancelled()) {
         return;
       }
 
@@ -237,6 +238,8 @@ public class BuildInfoExporterAction implements EnvironmentContributingAction {
         projectName = build.getParent().getFullName();
         buildNumber = build.getNumber();
         buildResult = build.getResult();
+      } catch (CancellationException e) {
+        return;
       } catch (InterruptedException e) {
         return;
       } catch (ExecutionException e) {
