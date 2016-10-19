@@ -28,15 +28,18 @@ package hudson.plugins.parameterizedtrigger;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ListMultimap;
 import hudson.*;
+import hudson.console.ConsoleNote;
 import hudson.console.HyperlinkNote;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
 import hudson.model.Action;
 import hudson.model.BuildListener;
+import hudson.model.Cause;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.BuildStepMonitor;
 import hudson.tasks.Builder;
 import hudson.model.Job;
+import hudson.model.Result;
 import hudson.model.Run;
 import hudson.model.queue.QueueTaskFuture;
 import hudson.util.IOException2;
@@ -44,11 +47,13 @@ import org.kohsuke.accmod.Restricted;
 import org.kohsuke.stapler.DataBoundConstructor;
 
 import java.io.IOException;
-import java.lang.Character.UnicodeScript;
+import java.io.PrintStream;
+import java.io.PrintWriter;
 import java.util.*;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -60,6 +65,69 @@ import java.util.logging.Logger;
  * @author Kohsuke Kawaguchi
  */
 public class TriggerBuilder extends Builder {
+
+    private static class TriggerConfigBuildListener implements BuildListener {
+        private final BuildListener parent;
+        
+        private final Semaphore statusChanged = new Semaphore(1);
+        
+        public TriggerConfigBuildListener(BuildListener parent) {
+            this.parent = parent;
+        }
+        
+        public void started(List<Cause> causes) {
+            parent.started(causes);
+            if (statusChanged.availablePermits() == 0) statusChanged.release();
+        }
+
+        public void finished(Result result) {
+            parent.finished(result);
+            if (statusChanged.availablePermits() == 0) statusChanged.release();
+        }
+        
+        public void waitForStatusChange() {
+            //try {
+            //    statusChanged.tryAcquire(15, TimeUnit.SECONDS);
+            //} catch (InterruptedException e) {
+                //ignore
+            //}
+            try {
+                Thread.sleep(5000);
+            } catch (InterruptedException e) {
+                
+            }
+        }
+
+        public PrintStream getLogger() {
+            return parent.getLogger();
+        }
+
+        public void annotate(ConsoleNote ann) throws IOException {
+            parent.annotate(ann);
+        }
+
+        public void hyperlink(String url, String text) throws IOException {
+            parent.hyperlink(url, text);
+        }
+
+        public PrintWriter error(String msg) {
+            return parent.error(msg);
+        }
+
+        public PrintWriter error(String format, Object... args) {
+            return parent.error(format, args);
+        }
+
+        public PrintWriter fatalError(String msg) {
+            return parent.fatalError(msg);
+        }
+
+        public PrintWriter fatalError(String format, Object... args) {
+            return parent.fatalError(format, args);
+        }
+
+
+    }
 
     private static final Logger LOGGER = Logger.getLogger(TriggerBuilder.class.getName());
 
@@ -91,10 +159,14 @@ public class TriggerBuilder extends Builder {
 
         boolean buildStepResult = true;
 
+        TriggerConfigBuildListener triggerListener = new TriggerConfigBuildListener(listener);
+        
+        Map<Object, String> jobHyperlinks = new HashMap<Object, String>();
+
         try {
             for (BlockableBuildTriggerConfig config : configs) {
                 ListMultimap<Job, QueueTaskFuture<? extends AbstractBuild>> futures = config.perform3(build, launcher,
-                        listener);
+                        triggerListener);
                 // Only contains resolved projects
                 List<Job> projectList = config.getJobs(build.getRootBuild().getProject().getParent(), env);
 
@@ -130,7 +202,7 @@ public class TriggerBuilder extends Builder {
                 } else {
                     // handle non-blocking configs
                     if (futures.isEmpty()) {
-                        listener.getLogger().println("Triggering projects: " + getProjectListAsString(projectList));
+                        listener.getLogger().println("Triggering projects: " + getProjectListAsString(jobHyperlinks, projectList));
                         for (Job p : projectList) {
                             BuildInfoExporterAction.addBuildInfoExporterAction(build, p.getFullName());
                         }
@@ -142,13 +214,13 @@ public class TriggerBuilder extends Builder {
                         // handle non-buildable projects
                         if (!p.isBuildable()) {
                             listener.getLogger().println("Skipping "
-                                    + HyperlinkNote.encodeTo('/' + p.getUrl(), p.getFullDisplayName())
+                                    + getOrCreateHyperlinkNote(jobHyperlinks, p)
                                     + ". The project is either disabled or the configuration has not been saved yet.");
                             continue;
                         }
                         for (QueueTaskFuture<? extends AbstractBuild> future : futures.get(p)) {
                             listener.getLogger().println("Waiting for the completion of "
-                                    + HyperlinkNote.encodeTo('/' + p.getUrl(), p.getFullDisplayName()));
+                                    + getOrCreateHyperlinkNote(jobHyperlinks, p));
                             BuildInfoExporterAction.addBuildInfoExporterAction(build, future);
                         }
                     }
@@ -157,7 +229,7 @@ public class TriggerBuilder extends Builder {
                     Set<Future<? extends AbstractBuild>> done = new HashSet<Future<? extends AbstractBuild>>();
                     do {
                         allDone = true;
-                        for (Job p : projectList) {
+                        for (Job<?,?> p : projectList) {
                             // handle non-buildable projects
                             if (!p.isBuildable()) {
                                 continue;
@@ -167,7 +239,7 @@ public class TriggerBuilder extends Builder {
                                 try {
                                 if (future != null ) {
                                     listener.getLogger().println("Checking for the completion of "
-                                            + HyperlinkNote.encodeTo('/' + p.getUrl(), p.getFullDisplayName()));
+                                            + getOrCreateHyperlinkNote(jobHyperlinks, p));
                                     Future<? extends AbstractBuild> startCondition = future.getStartCondition();
                                     if (!startCondition.isDone()) {
                                         allDone = false;
@@ -175,7 +247,7 @@ public class TriggerBuilder extends Builder {
                                     }
                                     if (done.add(startCondition)) {
                                         listener.getLogger().println(
-                                                HyperlinkNote.encodeTo('/' + p.getUrl(), p.getFullDisplayName())
+                                                getOrCreateHyperlinkNote(jobHyperlinks, p)
                                                         + " scheduled.");
                                     }
                                     if (!future.isDone()) {
@@ -184,7 +256,7 @@ public class TriggerBuilder extends Builder {
                                     }
                                     Run b = future.get();
                                     listener.getLogger()
-                                            .println(HyperlinkNote.encodeTo('/' + b.getUrl(), b.getFullDisplayName())
+                                            .println(getOrCreateHyperlinkNote(jobHyperlinks, b)
                                                     + " completed. Result was " + b.getResult());
 
                                     if (buildStepResult && config.getBlock().mapBuildStepResult(b.getResult())) {
@@ -201,7 +273,7 @@ public class TriggerBuilder extends Builder {
                             }
                         }
                         if (!allDone) {
-                            Thread.sleep(15);
+                            triggerListener.waitForStatusChange();
                         }
                     } while (!allDone);
                     BuildInfoExporterAction action = build.getAction(BuildInfoExporterAction.class);
@@ -216,14 +288,41 @@ public class TriggerBuilder extends Builder {
         return buildStepResult;
     }
 
+    private static String getOrCreateHyperlinkNote(Map<Object, String> hyperlinkNotes, Run run)
+    {
+      String note = hyperlinkNotes.get(run);
+      if (note == null) {
+        /** prevent calling encodeTo to often, it uses gzip deflate which takes long to init */
+        note = HyperlinkNote.encodeTo('/' + run.getUrl(), run.getFullDisplayName());
+        hyperlinkNotes.put(run, note);
+      }
+      return note;
+    }
+
+    private static String getOrCreateHyperlinkNote(Map<Object, String> hyperlinkNotes, Job job)
+    {
+      String note = hyperlinkNotes.get(job);
+      if (note == null) {
+        /** prevent calling encodeTo to often, it uses gzip deflate which takes long to init */
+        note = HyperlinkNote.encodeTo('/' + job.getUrl(), job.getFullDisplayName());
+        hyperlinkNotes.put(job, note);
+      }
+      return note;
+    }
+
+    
     // Public but restricted so we can add tests without completely changing the
     // tests package
     @Restricted(value = org.kohsuke.accmod.restrictions.NoExternalUse.class)
     public String getProjectListAsString(List<Job> projectList) {
+      return getProjectListAsString(new HashMap<Object, String>(), projectList);
+    }
+
+    public String getProjectListAsString(Map<Object, String> hyperlinkNotes, List<Job> projectList) {
         StringBuilder projectListString = new StringBuilder();
         for (Iterator<Job> iterator = projectList.iterator(); iterator.hasNext();) {
             Job project = iterator.next();
-            projectListString.append(HyperlinkNote.encodeTo('/' + project.getUrl(), project.getFullDisplayName()));
+            projectListString.append(getOrCreateHyperlinkNote(hyperlinkNotes, project));
             if (iterator.hasNext()) {
                 projectListString.append(", ");
             }
