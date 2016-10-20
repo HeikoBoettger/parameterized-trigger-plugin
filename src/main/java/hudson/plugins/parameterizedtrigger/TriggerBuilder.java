@@ -86,15 +86,10 @@ public class TriggerBuilder extends Builder {
         }
         
         public void waitForStatusChange() {
-            //try {
-            //    statusChanged.tryAcquire(15, TimeUnit.SECONDS);
-            //} catch (InterruptedException e) {
-                //ignore
-            //}
             try {
-                Thread.sleep(5000);
+                statusChanged.tryAcquire(15, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
-                
+                //ignore
             }
         }
 
