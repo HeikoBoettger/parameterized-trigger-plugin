@@ -88,6 +88,7 @@ public class TriggerBuilder extends Builder {
         public void waitForStatusChange() {
             try {
                 statusChanged.tryAcquire(15, TimeUnit.SECONDS);
+                statusChanged.drainPermits();
             } catch (InterruptedException e) {
                 //ignore
             }
