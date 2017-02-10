@@ -15,14 +15,17 @@ import hudson.model.BuildListener;
 import hudson.model.Cause;
 import hudson.model.CauseAction;
 import hudson.model.Cause.UpstreamCause;
+import hudson.model.Queue.QueueAction;
 import hudson.model.Describable;
 import hudson.model.Descriptor;
+import hudson.model.Executor;
 import hudson.model.Hudson;
 import hudson.model.Item;
 import hudson.model.ItemGroup;
 import hudson.model.Items;
 import hudson.model.Job;
 import hudson.model.ParametersAction;
+import hudson.model.Result;
 import hudson.model.Run;
 import hudson.model.TaskListener;
 import hudson.model.queue.QueueTaskFuture;
@@ -57,7 +60,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.StringTokenizer;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 import javax.annotation.Nonnull;
 import org.acegisecurity.AccessDeniedException;
 
@@ -524,10 +531,76 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
                     return project;
                 }
             };
+            
+            QueueTaskFuture<? extends AbstractBuild> existingBuild = connectToExistingBuild(project, queueActions);
+            if (existingBuild != null)
+            {
+                return existingBuild;
+            }
             return parameterizedJobMixIn.scheduleBuild2(quietPeriod, queueActions.toArray(new Action[queueActions.size()]));
         }
 
         // Trigger is not compatible with un-parameterized jobs
+        return null;
+    }
+
+    private QueueTaskFuture<? extends AbstractBuild> connectToExistingBuild(Job<?, ? extends AbstractBuild> project, List<Action> actions) {
+        for (final AbstractBuild build: project.getBuilds())
+        {
+            boolean shouldScheduleItem = false;
+            for (QueueAction action: build.getActions(QueueAction.class)) {
+                shouldScheduleItem |= action.shouldSchedule(actions);
+            }
+            for (QueueAction action: Util.filter(actions,QueueAction.class)) {
+                shouldScheduleItem |= action.shouldSchedule((new ArrayList<Action>(build.getAllActions())));
+            }
+            if(!shouldScheduleItem) {
+                return new QueueTaskFuture<AbstractBuild>() {
+
+                    @Override
+                    public boolean cancel(boolean arg0) {
+                        if (build.isBuilding())
+                        {
+                            Executor executor = build.getExecutor();
+                            if (executor != null) executor.interrupt();
+                            return true;
+                        }
+                        return false;
+                    }
+
+                    @Override
+                    public AbstractBuild get() throws InterruptedException, ExecutionException {
+                        return build;
+                    }
+
+                    @Override
+                    public AbstractBuild get(long arg0, TimeUnit arg1)
+                            throws InterruptedException, ExecutionException, TimeoutException {
+                        return build;
+                    }
+
+                    @Override
+                    public boolean isCancelled() {
+                        return Result.ABORTED.equals(build.getResult());
+                    }
+
+                    @Override
+                    public boolean isDone() {
+                        return !build.isBuilding();
+                    }
+
+                    @Override
+                    public Future<AbstractBuild> getStartCondition() {
+                        return this; //there is no difference
+                    }
+
+                    @Override
+                    public AbstractBuild waitForStart() throws InterruptedException, ExecutionException {
+                        return build;
+                    }
+                };
+            }
+        }
         return null;
     }
 
