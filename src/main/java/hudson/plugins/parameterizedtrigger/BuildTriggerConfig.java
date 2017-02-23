@@ -533,7 +533,7 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
                 }
             };
             
-            QueueTaskFuture<? extends AbstractBuild> existingBuild = connectToExistingBuild(project, queueActions);
+            QueueTaskFuture<? extends AbstractBuild> existingBuild = connectToExistingBuild(build, project, queueActions);
             if (existingBuild != null)
             {
                 return existingBuild;
@@ -545,7 +545,16 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
         return null;
     }
 
-    private QueueTaskFuture<? extends AbstractBuild> connectToExistingBuild(Job<?, ? extends AbstractBuild> project, List<Action> actions) {
+    private QueueTaskFuture<? extends AbstractBuild> connectToExistingBuild(AbstractBuild<?, ?> currentBuild, Job<?, ? extends AbstractBuild> project, List<Action> actions) {
+        Run upstreamRoot = findUpstreamRoot(currentBuild, actions);
+
+        //always trigger the build if a user started the root build
+        Cause userIdCause = upstreamRoot.getCause(UserIdCause.class);
+        boolean forceSchedule = userIdCause != null;
+        if(forceSchedule) {
+            return null;
+        }
+
         for (final AbstractBuild build: project.getBuilds())
         {
             boolean shouldScheduleItem = false;
@@ -555,8 +564,8 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
             for (QueueAction action: Util.filter(actions,QueueAction.class)) {
                 shouldScheduleItem |= action.shouldSchedule((new ArrayList<Action>(build.getAllActions())));
             }
-            shouldScheduleItem = true; //(build.getRootBuild().getCause(UserIdCause.class) != null); // currently enforced
             if(!shouldScheduleItem) {
+                //found a matching build
                 return new QueueTaskFuture<AbstractBuild>() {
                     
                     @Override
@@ -569,33 +578,33 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
                         }
                         return false;
                     }
-
+                
                     @Override
                     public AbstractBuild get() throws InterruptedException, ExecutionException {
                         return build;
                     }
-
+                
                     @Override
                     public AbstractBuild get(long arg0, TimeUnit arg1)
                             throws InterruptedException, ExecutionException, TimeoutException {
                         return build;
                     }
-
+                
                     @Override
                     public boolean isCancelled() {
                         return Result.ABORTED.equals(build.getResult());
                     }
-
+                
                     @Override
                     public boolean isDone() {
                         return !build.isBuilding();
                     }
-
+                
                     @Override
                     public Future<AbstractBuild> getStartCondition() {
                         return this; //there is no difference
                     }
-
+                
                     @Override
                     public AbstractBuild waitForStart() throws InterruptedException, ExecutionException {
                         return build;
@@ -604,6 +613,21 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
             }
         }
         return null;
+    }
+
+    private Run findUpstreamRoot(Run base, List<? extends Action> actions) {
+        for (Action action : actions) {
+            if (action instanceof CauseAction) {
+                CauseAction causeAction = (CauseAction) action;
+                UpstreamCause cause = (UpstreamCause) causeAction.findCause(UpstreamCause.class);
+                if (cause != null) return findUpstreamRoot(cause.getUpstreamRun());
+            }
+        }
+        return base;
+    }
+    
+    private Run findUpstreamRoot(Run run) {
+        return findUpstreamRoot(run, run.getAllActions());
     }
 
     protected QueueTaskFuture<? extends AbstractBuild> schedule(AbstractBuild<?, ?> build, Job project, List<Action> list) throws InterruptedException, IOException {
