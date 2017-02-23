@@ -15,6 +15,7 @@ import hudson.model.BuildListener;
 import hudson.model.Cause;
 import hudson.model.CauseAction;
 import hudson.model.Cause.UpstreamCause;
+import hudson.model.Cause.UserIdCause;
 import hudson.model.Queue.QueueAction;
 import hudson.model.Describable;
 import hudson.model.Descriptor;
@@ -554,9 +555,10 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
             for (QueueAction action: Util.filter(actions,QueueAction.class)) {
                 shouldScheduleItem |= action.shouldSchedule((new ArrayList<Action>(build.getAllActions())));
             }
+            shouldScheduleItem = true; //(build.getRootBuild().getCause(UserIdCause.class) != null); // currently enforced
             if(!shouldScheduleItem) {
                 return new QueueTaskFuture<AbstractBuild>() {
-
+                    
                     @Override
                     public boolean cancel(boolean arg0) {
                         if (build.isBuilding())
