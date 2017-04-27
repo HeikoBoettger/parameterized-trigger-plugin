@@ -546,15 +546,6 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
     }
 
     private QueueTaskFuture<? extends AbstractBuild> connectToExistingBuild(AbstractBuild<?, ?> currentBuild, Job<?, ? extends AbstractBuild> project, List<Action> actions) {
-        Run upstreamRoot = findUpstreamRoot(currentBuild, actions);
-
-        //always trigger the build if a user started the root build
-        Cause userIdCause = upstreamRoot.getCause(UserIdCause.class);
-        boolean forceSchedule = userIdCause != null;
-        if(forceSchedule) {
-            return null;
-        }
-
         for (final AbstractBuild build: project.getBuilds())
         {
             boolean shouldScheduleItem = false;
@@ -615,28 +606,12 @@ public class BuildTriggerConfig implements Describable<BuildTriggerConfig> {
         return null;
     }
 
-    private Run findUpstreamRoot(Run base, List<? extends Action> actions) {
-        for (Action action : actions) {
-            if (action instanceof CauseAction) {
-                CauseAction causeAction = (CauseAction) action;
-                UpstreamCause cause = (UpstreamCause) causeAction.findCause(UpstreamCause.class);
-                if (cause != null) return findUpstreamRoot(cause.getUpstreamRun());
-            }
-        }
-        return base;
-    }
-    
-    private Run findUpstreamRoot(Run run) {
-        return findUpstreamRoot(run, run.getAllActions());
-    }
-
     protected QueueTaskFuture<? extends AbstractBuild> schedule(AbstractBuild<?, ?> build, Job project, List<Action> list) throws InterruptedException, IOException {
         if (project instanceof ParameterizedJobMixIn.ParameterizedJob) {
             return schedule(build, project, ((ParameterizedJobMixIn.ParameterizedJob) project).getQuietPeriod(), list);
         } else {
             return schedule(build, project, 0, list);
         }
-
     }
 
     /**
